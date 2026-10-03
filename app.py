@@ -158,6 +158,12 @@ def merge_data(main, water, meter_cols, start, end, how, round_to, per_minute):
     return merged[order].reset_index(drop=True), dups
 
 
+@st.cache_data
+def filter_main(main, start, end):
+    df = main[(main["DateTime"] >= pd.Timestamp(start)) & (main["DateTime"] < pd.Timestamp(end) + pd.Timedelta(days=1))]
+    return df.reset_index(drop=True)
+
+
 # ---------------------------------------------------------------- export
 @st.cache_data(show_spinner="Building Excel file...")
 def make_xlsx(merged, units) -> bytes:
@@ -266,7 +272,7 @@ def main():
     with st.sidebar:
         st.header("Files")
         main_up = st.file_uploader("Gauge file (pressures and temperatures)", type=["csv", "txt", "xlsx", "xls"])
-        water_up = st.file_uploader("Water meter file", type=["csv", "txt", "xlsx", "xls"])
+        water_up = st.file_uploader("Water meter file (optional)", type=["csv", "txt", "xlsx", "xls"])
 
         with st.expander("File settings"):
             main_title_rows = st.number_input("Rows above the column names (gauge file)", 0, 20, 0)
@@ -280,19 +286,22 @@ def main():
             round_to = st.selectbox("Match timestamps to", ["1min", "30s", "5min", "exact"])
             per_minute = st.selectbox("Several water readings in one interval", ["first", "last", "mean"])
 
-    if not (main_up and water_up):
-        st.info("Upload the gauge file and the water meter file in the sidebar to get started.")
+    if not main_up:
+        st.info("Upload the gauge file in the sidebar to get started. The water meter file is optional.")
         st.stop()
 
     try:
         main, main_units = load_main(main_up.name, main_up.getvalue(), main_title_rows, main_dayfirst)
-        water, water_units, meter_cols = load_water(water_up.name, water_up.getvalue(),
-                                                    water_title_rows, water_dayfirst)
+        water, water_units, meter_cols = None, {}, []
+        if water_up:
+            water, water_units, meter_cols = load_water(water_up.name, water_up.getvalue(),
+                                                        water_title_rows, water_dayfirst)
     except Exception as e:
         st.error(f"Could not read the files: {e}")
         st.stop()
 
-    st.sidebar.caption("Water meters used: " + ", ".join(meter_cols))
+    if meter_cols:
+        st.sidebar.caption("Water meters used: " + ", ".join(meter_cols))
     lo, hi = main["DateTime"].min().date(), main["DateTime"].max().date()
     with st.sidebar:
         st.header("Date range")
@@ -303,8 +312,11 @@ def main():
         st.stop()
     start, end = picked
 
-    merged, dups = merge_data(main, water, meter_cols, start, end, how,
-                              None if round_to == "exact" else round_to, per_minute)
+    if water is None:
+        merged, dups = filter_main(main, start, end), 0
+    else:
+        merged, dups = merge_data(main, water, meter_cols, start, end, how,
+                                  None if round_to == "exact" else round_to, per_minute)
     if merged.empty:
         st.warning("No data in that date range.")
         st.stop()
@@ -315,13 +327,13 @@ def main():
 
     with st.sidebar:
         st.header("Y axes")
-        n_axes = int(st.number_input("Number of y axes", 1, 6, 2,
+        n_axes = int(st.number_input("Number of y axes", 1, 6, 2 if water is not None else 1,
                                      help="Axes alternate left, right, left, right..."))
         axes, titles = [], []
         for i in range(n_axes):
             key = f"axis_{i}"
             if key not in st.session_state:
-                st.session_state[key] = default_p if i == 0 else ([TOTAL] if i == 1 else [])
+                st.session_state[key] = default_p if i == 0 else ([TOTAL] if i == 1 and TOTAL in curves else [])
             st.session_state[key] = [c for c in st.session_state[key] if c in curves]   # drop stale picks
             side = "left" if i % 2 == 0 else "right"
             with st.expander(f"Axis {i + 1} ({side})", expanded=i < 2):
