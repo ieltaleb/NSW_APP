@@ -85,24 +85,37 @@ def load_main(name, data, title_rows, dayfirst):
     return df.reset_index(drop=True), units
 
 
+def find_time_col(names):
+    """The date-time column, found by name (Reading, DateTime, Time...) and otherwise the first column."""
+    for c in names:
+        if re.fullmatch(r"\s*(reading|date\s*time|datetime|date|time|timestamp)\s*", c, re.I):
+            return c
+    return names[0]
+
+
 @st.cache_data(show_spinner="Reading water file...")
 def load_water(name, data, title_rows, dayfirst):
     w = read_table(name, data, title_rows)
-    w_units = w.iloc[0]                       # units row (bbl/day)
+    names = [str(c) for c in w.columns]
+    w_units = pd.Series(w.iloc[0].values, index=names)      # units row (bbl/day)
     w = w.iloc[1:].reset_index(drop=True)
-    meter_cols = [str(c) for c in w.columns[1:3]]
-    if len(meter_cols) < 2:
-        raise ValueError(f"Expected a time column plus two water meter columns, found: {list(w.columns)}")
-    w.columns = [str(c) for c in w.columns]
-    cols = {"Datetime": pd.to_datetime(w[w.columns[0]], dayfirst=dayfirst, errors="coerce")}
+    w.columns = names
+
+    time_col = find_time_col(names)
+    others = [c for c in names if c != time_col]
+    meter_cols = [c for c in others if re.search(r"water\s*rate", c, re.I)] or others[-2:]
+    if not meter_cols:
+        raise ValueError(f"Could not find water meter columns in: {names}")
+
+    cols = {"Datetime": pd.to_datetime(w[time_col], dayfirst=dayfirst, errors="coerce")}
     units = {}
     for c in meter_cols:
         cols[c], cell_unit = split_values(w[c])
-        raw_unit = w_units.iloc[list(w.columns).index(c)]
+        raw_unit = w_units[c]
         units[c] = clean_unit(raw_unit) if pd.notna(raw_unit) else cell_unit
     df = pd.DataFrame(cols)
     if df["Datetime"].notna().sum() == 0:
-        raise ValueError(f"No readable dates in the water file. First values: {w[w.columns[0]].head(5).tolist()}")
+        raise ValueError(f"No readable dates in column '{time_col}'. First values: {w[time_col].head(5).tolist()}")
     # One meter runs at a time: a blank counts as zero unless both are blank
     df[TOTAL] = df[meter_cols].sum(axis=1, min_count=1)
     units[TOTAL] = next((u for u in units.values() if u), "")
@@ -241,6 +254,7 @@ def main():
         st.error(f"Could not read the files: {e}")
         st.stop()
 
+    st.sidebar.caption("Water meters used: " + ", ".join(meter_cols))
     lo, hi = main["DateTime"].min().date(), main["DateTime"].max().date()
     with st.sidebar:
         st.header("Date range")
