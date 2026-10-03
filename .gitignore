@@ -1,0 +1,4 @@
+*.csv
+*.xlsx
+merged_output*
+__pycache__/
