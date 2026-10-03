@@ -271,7 +271,7 @@ def main():
 
     with st.sidebar:
         st.header("Files")
-        main_up = st.file_uploader("ESP Date file (http://100.80.37.126:3000/)", type=["csv", "txt", "xlsx", "xls"])
+        main_up = st.file_uploader("ESP Date file From Analysis tab (http://100.80.37.126:3000/)", type=["csv", "txt", "xlsx", "xls"])
         water_up = st.file_uploader("Water meter Data (https://www.wds-solutions.com/?A=sgs-a)", type=["csv", "txt", "xlsx", "xls"])
 
         with st.expander("File settings"):
