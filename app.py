@@ -192,30 +192,68 @@ def make_csv(merged, units) -> bytes:
 
 
 # ---------------------------------------------------------------- plot
-def build_figure(merged, units, pressure_cols, avg_minutes):
-    rate = merged.set_index("DateTime")[TOTAL]
-    rate_avg = rate.rolling(f"{avg_minutes}min", min_periods=1).mean()
+PALETTE = ["#1f77b4", "#2ca02c", "#9467bd", "#d62728", "#ff7f0e", "#8c564b",
+           "#17becf", "#e377c2", "#bcbd22", "#7f7f7f"]
+AXIS_SPACING = 0.075          # paper-width fraction between stacked axes on the same side
 
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    palette = ["#1f77b4", "#2ca02c", "#9467bd", "#8c564b", "#17becf", "#7f7f7f"]
-    for i, col in enumerate(pressure_cols):
-        fig.add_trace(go.Scattergl(x=merged["DateTime"], y=merged[col], mode="lines", name=col.title(),
-                                   line=dict(color=palette[i % len(palette)], width=1.8)),
-                      secondary_y=False)
-    fig.add_trace(go.Scattergl(x=rate.index, y=rate.values, mode="lines", name="Total Water Rate",
-                               line=dict(color="rgba(255,127,14,0.35)", width=1)),
-                  secondary_y=True)
-    fig.add_trace(go.Scattergl(x=rate_avg.index, y=rate_avg.values, mode="lines",
-                               name=f"Total Water Rate ({avg_minutes} min avg)",
-                               line=dict(color="#d62728", width=2.5)),
-                  secondary_y=True)
 
-    p_unit = next((units[c] for c in pressure_cols if units.get(c)), "")
-    fig.update_yaxes(title_text=f"Tubing Pressure ({p_unit})", secondary_y=False)
-    fig.update_yaxes(title_text=f"Total Water Rate ({units.get(TOTAL, '')})", secondary_y=True,
-                     showgrid=False)
-    fig.update_xaxes(title_text="DateTime", tickformat="%m/%d/%Y\n%H:%M")
-    fig.update_layout(height=620, hovermode="x unified", margin=dict(t=60, r=20, l=20, b=20),
+def pretty(col):
+    return col.title() if col.isupper() else col
+
+
+def auto_title(cols, units, i):
+    """A readable axis title from the curves on it."""
+    found = {units.get(c, "") for c in cols}
+    unit = found.pop() if len(found) == 1 else ""
+    stripped = {re.sub(r"^ZONE\s*\d+\s*", "", c, flags=re.I) for c in cols}
+    base = pretty(stripped.pop()) if len(stripped) == 1 else (pretty(cols[0]) if len(cols) == 1 else f"Axis {i + 1}")
+    return f"{base} ({unit})" if unit else base
+
+
+def build_figure(merged, units, axes, titles, avg_cols, avg_minutes):
+    """axes: list of column lists, one per y axis. Axes alternate left, right, left, right..."""
+    active = [(i, cols) for i, cols in enumerate(axes) if cols]
+    n = len(active)
+    n_left, n_right = (n + 1) // 2, n // 2
+    x0 = (n_left - 1) * AXIS_SPACING
+    x1 = 1 - max(n_right - 1, 0) * AXIS_SPACING
+
+    fig = go.Figure()
+    layout = {"xaxis": dict(domain=[x0, x1], title="DateTime", tickformat="%m/%d/%Y\n%H:%M")}
+    t = merged["DateTime"]
+    color_i = 0
+    for k, (i, cols) in enumerate(active):
+        ax_id = "y" if k == 0 else f"y{k + 1}"
+        axis_color = None
+        for col in cols:
+            color = PALETTE[color_i % len(PALETTE)]
+            color_i += 1
+            axis_color = axis_color or color
+            has_avg = col in avg_cols
+            fig.add_trace(go.Scattergl(
+                x=t, y=merged[col], mode="lines", name=pretty(col), yaxis=ax_id,
+                line=dict(color=color, width=1 if has_avg else 1.8), opacity=0.35 if has_avg else 1))
+            if has_avg:
+                avg = merged.set_index("DateTime")[col].rolling(f"{avg_minutes}min", min_periods=1).mean()
+                fig.add_trace(go.Scattergl(
+                    x=avg.index, y=avg.values, mode="lines", name=f"{pretty(col)} ({avg_minutes} min avg)",
+                    yaxis=ax_id, line=dict(color=color, width=2.8)))
+        if len(cols) > 1:
+            axis_color = "#444444"          # shared axis: neutral colour
+        ax = dict(title=dict(text=titles[i].strip() or auto_title(cols, units, i), font=dict(color=axis_color)),
+                  tickfont=dict(color=axis_color), showgrid=(k == 0), zeroline=False)
+        side_left = (k % 2 == 0)
+        stack = k // 2                       # how many axes already sit on this side
+        if k > 0:
+            ax["overlaying"] = "y"
+        ax["side"] = "left" if side_left else "right"
+        if stack > 0:
+            ax["anchor"] = "free"
+            ax["position"] = x0 - stack * AXIS_SPACING if side_left else x1 + stack * AXIS_SPACING
+        layout["yaxis" if k == 0 else f"yaxis{k + 1}"] = ax
+
+    fig.update_layout(**layout)
+    fig.update_layout(height=640, hovermode="x unified", margin=dict(t=60, r=70, l=70, b=20),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
     return fig
 
@@ -259,8 +297,6 @@ def main():
     with st.sidebar:
         st.header("Date range")
         picked = st.date_input("Show data from / to", value=(lo, hi), min_value=lo, max_value=hi)
-        st.header("Averaging")
-        avg_minutes = st.number_input("Water rate averaging window (minutes)", 1, 1440, 15, step=1)
 
     if not isinstance(picked, (tuple, list)) or len(picked) != 2:
         st.info("Pick an end date to finish the range.")
@@ -274,13 +310,37 @@ def main():
         st.stop()
 
     units = {**main_units, **water_units}
-    default_p = [c for c in merged.columns if re.match(r"ZONE\s*\d+\s*TUBING PRESSURE", c, re.I)]
+    curves = [c for c in merged.columns if c != "DateTime"]
+    default_p = [c for c in curves if re.match(r"ZONE\s*\d+\s*TUBING PRESSURE", c, re.I)] or curves[:1]
+
     with st.sidebar:
-        st.header("Left axis")
-        pressure_cols = st.multiselect("Pressure curves", [c for c in merged.columns if units.get(c, "").startswith("psi")],
-                                       default=default_p)
-    if not pressure_cols:
-        st.info("Pick at least one pressure curve.")
+        st.header("Y axes")
+        n_axes = int(st.number_input("Number of y axes", 1, 6, 2,
+                                     help="Axes alternate left, right, left, right..."))
+        axes, titles = [], []
+        for i in range(n_axes):
+            key = f"axis_{i}"
+            if key not in st.session_state:
+                st.session_state[key] = default_p if i == 0 else ([TOTAL] if i == 1 else [])
+            st.session_state[key] = [c for c in st.session_state[key] if c in curves]   # drop stale picks
+            side = "left" if i % 2 == 0 else "right"
+            with st.expander(f"Axis {i + 1} ({side})", expanded=i < 2):
+                sel = st.multiselect("Curves", curves, key=key,
+                                     format_func=lambda c: f"{c} ({units[c]})" if units.get(c) else c)
+                ttl = st.text_input("Axis title (optional)", key=f"title_{i}")
+            axes.append(sel)
+            titles.append(ttl)
+
+        st.header("Moving average")
+        picked_curves = [c for a in axes for c in a]
+        if "avg_cols" not in st.session_state:
+            st.session_state["avg_cols"] = [TOTAL] if TOTAL in picked_curves else []
+        st.session_state["avg_cols"] = [c for c in st.session_state["avg_cols"] if c in picked_curves]
+        avg_cols = st.multiselect("Add a moving average for", picked_curves, key="avg_cols")
+        avg_minutes = int(st.number_input("Averaging window (minutes)", 1, 1440, 15, step=1))
+
+    if not picked_curves:
+        st.info("Pick at least one curve for an axis.")
         st.stop()
 
     c1, c2, c3 = st.columns(3)
@@ -290,7 +350,7 @@ def main():
     if dups and per_minute:
         st.caption(f"{dups:,} water readings shared an interval with another reading. Using the {per_minute} reading.")
 
-    st.plotly_chart(build_figure(merged, units, pressure_cols, int(avg_minutes)))
+    st.plotly_chart(build_figure(merged, units, axes, titles, avg_cols, avg_minutes))
 
     d1, d2, _ = st.columns([1, 1, 4])
     d1.download_button("Download Excel", make_xlsx(merged, units), "merged_output.xlsx",
