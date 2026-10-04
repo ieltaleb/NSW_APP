@@ -324,10 +324,11 @@ def main():
     units = {**main_units, **water_units}
         # Rename columns and change units before plotting and export
     RENAME = {"RUN TIME SINCE LAST START": "RUN DURATION SINCE LAST START"}
-    UNIT_OVERRIDE = {"RUN DURATION SINCE LAST START": "hr"}   # keyed by the new name
-
+    UNIT_OVERRIDE = {"RUN DURATION SINCE LAST START": "hr"}
     merged = merged.rename(columns=RENAME)
     units = {RENAME.get(c, c): UNIT_OVERRIDE.get(RENAME.get(c, c), u) for c, u in units.items()}
+
+    curves = [c for c in merged.columns if c != "DateTime"]
     
     curves = [c for c in merged.columns if c != "DateTime"]
     default_p = [c for c in curves if re.match(r"ZONE\s*\d+\s*TUBING PRESSURE", c, re.I)] or curves[:1]
