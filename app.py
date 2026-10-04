@@ -215,6 +215,9 @@ def auto_title(cols, units, i):
     base = pretty(stripped.pop()) if len(stripped) == 1 else (pretty(cols[0]) if len(cols) == 1 else f"Axis {i + 1}")
     return f"{base} ({unit})" if unit else base
 
+def rolling_avg(merged, col, minutes):
+    """Time-based moving average of one column, in the same row order as merged."""
+    return merged.set_index("DateTime")[col].rolling(f"{minutes}min", min_periods=1).mean()
 
 def build_figure(merged, units, axes, titles, avg_cols, avg_minutes):
     """axes: list of column lists, one per y axis. Axes alternate left, right, left, right..."""
@@ -358,6 +361,7 @@ def main():
         st.session_state["avg_cols"] = [c for c in st.session_state["avg_cols"] if c in picked_curves]
         avg_cols = st.multiselect("Add a moving average for", picked_curves, key="avg_cols")
         avg_minutes = int(st.number_input("Averaging window (minutes)", 1, 1440, 15, step=1))
+        include_avg = st.checkbox("Include moving averages in downloads", value=True)
 
     if not picked_curves:
         st.info("Pick at least one curve for an axis.")
@@ -376,7 +380,14 @@ def main():
     d1.download_button("Download Excel", make_xlsx(merged, units), "merged_output.xlsx",
                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     d2.download_button("Download CSV", make_csv(merged, units), "merged_output.csv", "text/csv")
-
+    export_df, export_units = merged, units
+    if include_avg and avg_cols:
+        export_df, export_units = merged.copy(), dict(units)
+        for col in avg_cols:
+            name = f"{col} ({avg_minutes} min avg)"
+            export_df[name] = rolling_avg(merged, col, avg_minutes).values
+            export_units[name] = units.get(col, "")
+            
     with st.expander("Preview merged data"):
         st.dataframe(merged.head(500))
 
