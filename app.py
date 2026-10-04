@@ -376,10 +376,6 @@ def main():
 
     st.plotly_chart(build_figure(merged, units, axes, titles, avg_cols, avg_minutes))
 
-    d1, d2, _ = st.columns([1, 1, 4])
-    d1.download_button("Download Excel", make_xlsx(export_df, export_units), "merged_output.xlsx",
-                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    d2.download_button("Download CSV", make_csv(export_df, export_units), "merged_output.csv", "text/csv")
     export_df, export_units = merged, units
     if include_avg and avg_cols:
         export_df, export_units = merged.copy(), dict(units)
@@ -387,6 +383,11 @@ def main():
             name = f"{col} ({avg_minutes} min avg)"
             export_df[name] = rolling_avg(merged, col, avg_minutes).values
             export_units[name] = units.get(col, "")
+
+    d1, d2, _ = st.columns([1, 1, 4])
+    d1.download_button("Download Excel", make_xlsx(export_df, export_units), "merged_output.xlsx",
+                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    d2.download_button("Download CSV", make_csv(export_df, export_units), "merged_output.csv", "text/csv")
             
     with st.expander("Preview merged data"):
         st.dataframe(merged.head(500))
