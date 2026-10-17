@@ -114,6 +114,10 @@ def load_water(name, data, title_rows, dayfirst):
         raw_unit = w_units[c]
         units[c] = clean_unit(raw_unit) if pd.notna(raw_unit) else cell_unit
     df = pd.DataFrame(cols)
+    # Apply the 1-hour subtraction only on or after your DST transition date (change the date as needed)
+    dst_start = pd.Timestamp("2026-10-04") # Example transition date
+    mask = df["Datetime"] >= dst_start
+    df.loc[mask, "Datetime"] = df.loc[mask, "Datetime"] - pd.Timedelta(hours=1)    
     if df["Datetime"].notna().sum() == 0:
         raise ValueError(f"No readable dates in column '{time_col}'. First values: {w[time_col].head(5).tolist()}")
     # One meter runs at a time: a blank counts as zero unless both are blank
