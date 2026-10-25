@@ -104,6 +104,7 @@ def load_water(name, data, title_rows, dayfirst):
     time_col = find_time_col(names)
     others = [c for c in names if c != time_col]
     meter_cols = [c for c in others if re.search(r"water\s*rate", c, re.I)] or others[-2:]
+    thp_cols = [c for c in others if re.search(r"\bthp\b", c, re.I) or re.search(r"tubing\s*head\s*pressure", c, re.I)]
     if not meter_cols:
         raise ValueError(f"Could not find water meter columns in: {names}")
 
@@ -113,6 +114,10 @@ def load_water(name, data, title_rows, dayfirst):
         cols[c], cell_unit = split_values(w[c])
         raw_unit = w_units[c]
         units[c] = clean_unit(raw_unit) if pd.notna(raw_unit) else cell_unit
+    for c in thp_cols:
+        cols[c], _ = split_values(w[c])
+        cols[c] = cols[c] + 14.7   # convert psig -> psi (absolute)
+        units[c] = "psi"           # fix the unit in the second row to psi
     df = pd.DataFrame(cols)
     # Apply the 1-hour subtraction only on or after your DST transition date (change the date as needed)
     dst_start = pd.Timestamp("2026-10-04") # Example transition date
@@ -124,12 +129,12 @@ def load_water(name, data, title_rows, dayfirst):
     df[TOTAL] = df[meter_cols].sum(axis=1, min_count=1)
     units[TOTAL] = next((u for u in units.values() if u), "")
     df = df.dropna(subset=["Datetime"]).sort_values("Datetime")
-    return df.reset_index(drop=True), units, meter_cols
+    return df.reset_index(drop=True), units, meter_cols, thp_cols
 
 
 # ---------------------------------------------------------------- merging
 @st.cache_data(show_spinner="Merging...")
-def merge_data(main, water, meter_cols, start, end, how, round_to, per_minute):
+def merge_data(main, water, meter_cols, thp_cols, start, end, how, round_to, per_minute):
     def keep_range(df, col):
         if start is not None:
             df = df[df[col] >= pd.Timestamp(start)]
@@ -139,7 +144,7 @@ def merge_data(main, water, meter_cols, start, end, how, round_to, per_minute):
 
     m = keep_range(main, "DateTime")
     x = keep_range(water, "Datetime")
-    water_cols = list(meter_cols) + [TOTAL]
+    water_cols = list(meter_cols) + [TOTAL] + list(thp_cols)
 
     if round_to:
         m["key"] = m["DateTime"].dt.floor(round_to)
@@ -299,9 +304,9 @@ def main():
 
     try:
         main, main_units = load_main(main_up.name, main_up.getvalue(), main_title_rows, main_dayfirst)
-        water, water_units, meter_cols = None, {}, []
+        water, water_units, meter_cols, thp_cols = None, {}, []
         if water_up:
-            water, water_units, meter_cols = load_water(water_up.name, water_up.getvalue(),
+            water, water_units, meter_cols, thp_cols = load_water(water_up.name, water_up.getvalue(),
                                                         water_title_rows, water_dayfirst)
     except Exception as e:
         st.error(f"Could not read the files: {e}")
@@ -309,6 +314,8 @@ def main():
 
     if meter_cols:
         st.sidebar.caption("Water meters used: " + ", ".join(meter_cols))
+    if thp_cols:
+        st.sidebar.caption("THP: " + ", ".join(thp_cols) + " (psig)")
     lo, hi = main["DateTime"].min().date(), main["DateTime"].max().date()
     with st.sidebar:
         st.header("Date range")
@@ -322,7 +329,7 @@ def main():
     if water is None:
         merged, dups = filter_main(main, start, end), 0
     else:
-        merged, dups = merge_data(main, water, meter_cols, start, end, how,
+        merged, dups = merge_data(main, water, meter_cols, thp_cols, start, end, how,
                                   None if round_to == "exact" else round_to, per_minute)
     if merged.empty:
         st.warning("No data in that date range.")
@@ -399,3 +406,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
