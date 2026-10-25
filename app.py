@@ -304,7 +304,7 @@ def main():
 
     try:
         main, main_units = load_main(main_up.name, main_up.getvalue(), main_title_rows, main_dayfirst)
-        water, water_units, meter_cols, thp_cols = None, {}, []
+        water, water_units, meter_cols, thp_cols = None, {}, [], []
         if water_up:
             water, water_units, meter_cols, thp_cols = load_water(water_up.name, water_up.getvalue(),
                                                         water_title_rows, water_dayfirst)
@@ -406,6 +406,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
